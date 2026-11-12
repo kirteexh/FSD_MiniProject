@@ -7,8 +7,8 @@ const router = Router();
 router.use(authenticateToken);
 
 router.get('/', getAlerts);
-router.put('/:id/read', markRead);
+// IMPORTANT: Put specific subpath `/mark-all/read` before parameter `:id/read` so Express does not match `:id = 'mark-all'`
 router.put('/mark-all/read', markAllRead);
+router.put('/:id/read', markRead);
 
 export default router;
-

@@ -15,7 +15,7 @@ export const getSupplierById = async (req: Request, res: Response) => {
     const { id } = req.params;
     const supplier = await dbStore.getSupplierById(id);
     if (!supplier) {
-      return res.status(404).json({ success: false, message: 'Supplier not found.' });
+      return res.status(404).json({ success: false, message: 'Supplier not found' });
     }
     res.json({ success: true, supplier });
   } catch (error: any) {
@@ -26,8 +26,9 @@ export const getSupplierById = async (req: Request, res: Response) => {
 export const createSupplier = async (req: Request, res: Response) => {
   try {
     const { supplierName, contactPerson, phone, email, address, gstNumber, paymentTerms, notes } = req.body;
-    if (!supplierName || !contactPerson || !phone || !email || !address) {
-      return res.status(400).json({ success: false, message: 'Missing required supplier fields.' });
+
+    if (!supplierName || !phone) {
+      return res.status(400).json({ success: false, message: 'Supplier name and phone are required.' });
     }
 
     const supplier = await dbStore.createSupplier({
@@ -37,7 +38,7 @@ export const createSupplier = async (req: Request, res: Response) => {
       email,
       address,
       gstNumber,
-      paymentTerms,
+      paymentTerms: paymentTerms || 'Net 30',
       notes,
     });
 
@@ -50,13 +51,25 @@ export const createSupplier = async (req: Request, res: Response) => {
 export const updateSupplier = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const supplier = await dbStore.updateSupplier(id, req.body);
-    if (!supplier) {
-      return res.status(404).json({ success: false, message: 'Supplier not found.' });
+    const updated = await dbStore.updateSupplier(id, req.body);
+    if (!updated) {
+      return res.status(404).json({ success: false, message: 'Supplier not found' });
     }
-    res.json({ success: true, supplier });
+    res.json({ success: true, supplier: updated });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
+export const deleteSupplier = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const deleted = await dbStore.deleteSupplier(id);
+    if (!deleted) {
+      return res.status(404).json({ success: false, message: 'Supplier not found' });
+    }
+    res.json({ success: true, message: 'Supplier removed successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
