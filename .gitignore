@@ -10,6 +10,13 @@ out/
 # TypeScript compiler output
 dist/
 */dist/
+*.tsbuildinfo
+
+# Test Coverage & Uploads
+coverage/
+*/coverage/
+uploads/
+*/uploads/
 
 # Environment files
 .env
@@ -17,7 +24,6 @@ dist/
 .env.*.local
 */.env
 */.env.local
-
 
 # Logs
 *.log
