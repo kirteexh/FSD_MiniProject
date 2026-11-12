@@ -32,21 +32,25 @@ export const getSaleById = async (req: Request, res: Response) => {
 export const returnSale = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { reason } = req.body;
+    const { reason, items } = req.body;
 
     if (!reason) {
       return res.status(400).json({ success: false, message: 'Reason for return is required.' });
     }
 
+    if (!req.user?._id) {
+      return res.status(401).json({ success: false, message: 'Authenticated user session required for return.' });
+    }
+
     const sale = await dbStore.returnSale(
       id,
       reason,
-      req.user?._id || '66a100000000000000000001'
+      req.user._id,
+      items
     );
 
-    res.json({ success: true, message: 'Sale marked as returned and inventory restored.', sale });
+    res.json({ success: true, message: 'Sale marked as returned and non-expired inventory restored.', sale });
   } catch (error: any) {
     res.status(400).json({ success: false, message: error.message });
   }
 };
-

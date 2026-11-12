@@ -5,13 +5,17 @@ import { emitEvent } from '../socket/socketHandler.js';
 
 export const checkout = async (req: AuthRequest, res: Response) => {
   try {
-    const { customerName, customerPhone, items, discount, paymentMode, notes } = req.body;
+    const { customerName, customerPhone, items, discount, paymentMode, notes, prescription } = req.body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ success: false, message: 'Cart items cannot be empty.' });
     }
 
-    const cashierId = req.user?._id || '66a100000000000000000002';
+    if (!req.user?._id) {
+      return res.status(401).json({ success: false, message: 'Authenticated user session required for billing.' });
+    }
+
+    const cashierId = req.user._id;
 
     const result = await dbStore.processCheckout({
       cashierId,
@@ -21,13 +25,14 @@ export const checkout = async (req: AuthRequest, res: Response) => {
       discount: Number(discount) || 0,
       paymentMode: paymentMode || 'Cash',
       notes,
+      prescription,
     });
 
     // Emit live sales event
     emitEvent('sale_completed', {
       invoiceNo: result.sale.invoiceNo,
       totalAmount: result.sale.totalAmount,
-      cashierName: req.user?.name || 'Cashier',
+      cashierName: req.user.name,
       timestamp: result.sale.createdAt,
     });
 
@@ -47,4 +52,3 @@ export const checkout = async (req: AuthRequest, res: Response) => {
     res.status(400).json({ success: false, message: error.message });
   }
 };
-

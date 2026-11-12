@@ -12,6 +12,37 @@ import { AuditLogModel } from '../models/AuditLog.js';
 import { SaleReturnModel } from '../models/SaleReturn.js';
 import { SettingsModel } from '../models/Settings.js';
 
+// Financial calculation helper to prevent floating-point rounding errors
+export const roundMoney = (num: number): number => {
+  return Math.round((num + Number.EPSILON) * 100) / 100;
+};
+
+// Async Mutex for in-memory atomicity during concurrent checkout operations
+class AsyncLock {
+  private queue: (() => void)[] = [];
+  private locked = false;
+
+  async acquire(): Promise<() => void> {
+    return new Promise((resolve) => {
+      const run = () => {
+        this.locked = true;
+        resolve(() => {
+          this.locked = false;
+          const next = this.queue.shift();
+          if (next) next();
+        });
+      };
+      if (!this.locked) {
+        run();
+      } else {
+        this.queue.push(run);
+      }
+    });
+  }
+}
+
+const checkoutMutex = new AsyncLock();
+
 // In-Memory Hybrid Store
 class InMemoryStore {
   users: any[];
@@ -93,10 +124,23 @@ class InMemoryStore {
     return this.users[index];
   }
 
+  async deleteUser(id: string) {
+    if (getIsDbConnected()) {
+      return await UserModel.findByIdAndDelete(id);
+    }
+    const index = this.users.findIndex((u) => u._id.toString() === id.toString());
+    if (index === -1) return false;
+    this.users.splice(index, 1);
+    return true;
+  }
+
   // MEDICATIONS & BATCHES
   async getMedications(filter: { search?: string; category?: string; status?: string }) {
     let meds: any[] = [];
     let batches: any[] = [];
+    const settings = await this.getSettings();
+    const expiryWindowDays = settings?.expiryAlertDays || 60;
+    const defaultReorder = settings?.defaultReorderThreshold || 20;
 
     if (getIsDbConnected()) {
       meds = await MedicationModel.find({ isActive: true }).lean();
@@ -107,7 +151,7 @@ class InMemoryStore {
     }
 
     const now = new Date();
-    const thirtyDaysAhead = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const alertThresholdDate = new Date(now.getTime() + expiryWindowDays * 24 * 60 * 60 * 1000);
 
     // Combine medication with batch aggregates
     let result = meds.map((med) => {
@@ -121,17 +165,19 @@ class InMemoryStore {
 
       // Check status
       let stockStatus = 'In Stock';
-      const hasExpired = medBatches.some((b) => new Date(b.expiryDate) < now);
+      const hasExpired = medBatches.some((b) => new Date(b.expiryDate) < now && (b.quantityInStock || 0) > 0);
       const hasExpiringSoon = medBatches.some((b) => {
         const exp = new Date(b.expiryDate);
-        return exp >= now && exp <= thirtyDaysAhead;
+        return exp >= now && exp <= alertThresholdDate && (b.quantityInStock || 0) > 0;
       });
+
+      const reorderLevel = med.reorderThreshold ?? defaultReorder;
 
       if (totalStock === 0) {
         stockStatus = 'Out of Stock';
       } else if (hasExpired && medBatches.every((b) => new Date(b.expiryDate) < now)) {
         stockStatus = 'Expired';
-      } else if (totalStock <= (med.reorderThreshold || 20)) {
+      } else if (totalStock <= reorderLevel) {
         stockStatus = 'Low Stock';
       } else if (hasExpiringSoon) {
         stockStatus = 'Expiring Soon';
@@ -204,6 +250,12 @@ class InMemoryStore {
     };
   }
 
+  async getMedicationByBarcode(code: string) {
+    const meds = await this.getMedications({ search: code });
+    const exact = meds.find((m) => m.barcode === code);
+    return exact || meds[0] || null;
+  }
+
   async createMedication(medData: any, initialBatch?: any, userId?: string) {
     let newMed: any = null;
     let newBatch: any = null;
@@ -219,12 +271,12 @@ class InMemoryStore {
         });
         await newBatch.save();
 
-        // Log movement
         await new StockMovementModel({
           medicationId: newMed._id,
           batchId: newBatch._id,
           movementType: 'MANUAL_ADJUSTMENT',
           quantity: initialBatch.quantityInStock,
+          balanceBefore: 0,
           balanceAfter: initialBatch.quantityInStock,
           performedBy: userId || '66a100000000000000000001',
           reason: 'Initial stock on medication creation',
@@ -259,6 +311,7 @@ class InMemoryStore {
           batchId: batchId,
           movementType: 'MANUAL_ADJUSTMENT',
           quantity: initialBatch.quantityInStock,
+          balanceBefore: 0,
           balanceAfter: initialBatch.quantityInStock,
           performedBy: userId || '66a100000000000000000001',
           reason: 'Initial stock on medication creation',
@@ -295,6 +348,8 @@ class InMemoryStore {
         batchId: newBatch._id,
         movementType: 'PURCHASE_RECEIPT',
         quantity: batchData.quantityInStock,
+        balanceBefore: 0,
+        balanceAfter: batchData.quantityInStock,
         performedBy: userId || '66a100000000000000000001',
         reason: 'New inventory batch added',
       }).save();
@@ -315,6 +370,8 @@ class InMemoryStore {
         batchId: batchId,
         movementType: 'PURCHASE_RECEIPT',
         quantity: batchData.quantityInStock,
+        balanceBefore: 0,
+        balanceAfter: batchData.quantityInStock,
         performedBy: userId || '66a100000000000000000001',
         reason: 'New inventory batch added',
         createdAt: new Date(),
@@ -330,12 +387,18 @@ class InMemoryStore {
     reason: string,
     userId: string
   ) {
+    if (!userId) {
+      throw new Error('Authenticated user ID required for stock adjustment audit.');
+    }
+
     let updatedBatch: any = null;
 
     if (getIsDbConnected()) {
       const batch = await InventoryBatchModel.findById(batchId);
       if (!batch) throw new Error('Batch not found');
-      batch.quantityInStock = Math.max(0, batch.quantityInStock + quantityChange);
+      const balanceBefore = batch.quantityInStock;
+      const newBalance = Math.max(0, balanceBefore + quantityChange);
+      batch.quantityInStock = newBalance;
       if (batch.quantityInStock === 0) batch.status = 'depleted';
       await batch.save();
       updatedBatch = batch;
@@ -345,14 +408,17 @@ class InMemoryStore {
         batchId,
         movementType: quantityChange > 0 ? 'MANUAL_ADJUSTMENT' : 'DAMAGE_DISPOSAL',
         quantity: quantityChange,
-        balanceAfter: batch.quantityInStock,
+        balanceBefore,
+        balanceAfter: newBalance,
         performedBy: userId,
         reason,
       }).save();
     } else {
       const batch = this.batches.find((b) => b._id.toString() === batchId.toString());
       if (!batch) throw new Error('Batch not found');
-      batch.quantityInStock = Math.max(0, batch.quantityInStock + quantityChange);
+      const balanceBefore = batch.quantityInStock;
+      const newBalance = Math.max(0, balanceBefore + quantityChange);
+      batch.quantityInStock = newBalance;
       if (batch.quantityInStock === 0) batch.status = 'depleted';
       updatedBatch = batch;
 
@@ -362,7 +428,8 @@ class InMemoryStore {
         batchId,
         movementType: quantityChange > 0 ? 'MANUAL_ADJUSTMENT' : 'DAMAGE_DISPOSAL',
         quantity: quantityChange,
-        balanceAfter: batch.quantityInStock,
+        balanceBefore,
+        balanceAfter: newBalance,
         performedBy: userId,
         reason,
         createdAt: new Date(),
@@ -372,7 +439,7 @@ class InMemoryStore {
     return updatedBatch;
   }
 
-  // BILLING & CHECKOUT (FEFO ALGORITHM)
+  // BILLING & CHECKOUT (RIGOROUS FEFO ALGORITHM & ATOMIC CONCURRENCY)
   async processCheckout(saleData: {
     cashierId: string;
     customerName?: string;
@@ -381,145 +448,178 @@ class InMemoryStore {
     discount?: number;
     paymentMode: 'Cash' | 'Card' | 'UPI';
     notes?: string;
-  }) {
-    const saleItems: any[] = [];
-    let subtotal = 0;
-    const lowStockAlertsToTrigger: any[] = [];
-
-    // Process each item using FEFO (First-Expired, First-Out)
-    for (const item of saleData.items) {
-      let needed = item.quantity;
-      let medBatches: any[] = [];
-      let med: any = null;
-
-      if (getIsDbConnected()) {
-        med = await MedicationModel.findById(item.medicationId);
-        medBatches = await InventoryBatchModel.find({
-          medicationId: item.medicationId,
-          status: 'active',
-          quantityInStock: { $gt: 0 },
-        }).sort({ expiryDate: 1 }); // FEFO
-      } else {
-        med = this.medications.find((m) => m._id.toString() === item.medicationId.toString());
-        medBatches = this.batches
-          .filter(
-            (b) =>
-              b.medicationId.toString() === item.medicationId.toString() &&
-              b.status === 'active' &&
-              b.quantityInStock > 0
-          )
-          .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
-      }
-
-      if (!med) throw new Error(`Medication not found: ${item.medicationId}`);
-
-      const totalStock = medBatches.reduce((acc, b) => acc + b.quantityInStock, 0);
-      if (totalStock < needed) {
-        throw new Error(
-          `Insufficient stock for ${med.name}. Requested: ${needed}, Available: ${totalStock}`
-        );
-      }
-
-      for (const batch of medBatches) {
-        if (needed <= 0) break;
-        const take = Math.min(batch.quantityInStock, needed);
-        batch.quantityInStock -= take;
-        if (batch.quantityInStock === 0) batch.status = 'depleted';
-
-        if (getIsDbConnected()) {
-          await batch.save();
-        }
-
-        const itemSubtotal = take * batch.sellingPrice;
-        subtotal += itemSubtotal;
-
-        saleItems.push({
-          medicationId: med._id,
-          batchId: batch._id,
-          medicationName: med.name,
-          batchNo: batch.batchNo,
-          quantity: take,
-          unitPrice: batch.sellingPrice,
-          subtotal: itemSubtotal,
-        });
-
-        // Record stock movement
-        const movementData = {
-          medicationId: med._id,
-          batchId: batch._id,
-          movementType: 'SALE',
-          quantity: -take,
-          balanceAfter: batch.quantityInStock,
-          performedBy: saleData.cashierId,
-          reason: `POS sale to ${saleData.customerName || 'Customer'}`,
-          createdAt: new Date(),
-        };
-
-        if (getIsDbConnected()) {
-          await new StockMovementModel(movementData).save();
-        } else {
-          this.stockMovements.unshift({ _id: this.genId(), ...movementData });
-        }
-
-        needed -= take;
-      }
-
-      // Check if total stock is now below reorder threshold
-      const remainingStock = totalStock - item.quantity;
-      if (remainingStock <= (med.reorderThreshold || 20)) {
-        lowStockAlertsToTrigger.push({
-          medicationId: med._id,
-          message: `Low Stock Alert: ${med.name} has only ${remainingStock} units left (Threshold: ${med.reorderThreshold || 20}).`,
-          thresholdAtAlert: med.reorderThreshold || 20,
-          alertType: remainingStock === 0 ? 'OUT_OF_STOCK' : 'LOW_STOCK',
-        });
-      }
-    }
-
-    const discount = saleData.discount || 0;
-    const taxRate = this.settings?.taxRate || 5;
-    const taxableAmount = Math.max(0, subtotal - discount);
-    const tax = Math.round(((taxableAmount * taxRate) / 100) * 100) / 100;
-    const totalAmount = Math.round((taxableAmount + tax) * 100) / 100;
-
-    const count = getIsDbConnected() ? (await SaleModel.countDocuments()) + 1 : this.sales.length + 1;
-    const invoicePrefix = this.settings?.invoicePrefix || 'INV-2026-';
-    const invoiceNo = `${invoicePrefix}${count.toString().padStart(4, '0')}`;
-
-    const newSale = {
-      invoiceNo,
-      cashierId: saleData.cashierId,
-      customerName: saleData.customerName || 'Walk-in Customer',
-      customerPhone: saleData.customerPhone || 'N/A',
-      items: saleItems,
-      subtotal,
-      discount,
-      tax,
-      totalAmount,
-      paymentMode: saleData.paymentMode,
-      status: 'completed',
-      notes: saleData.notes,
-      createdAt: new Date(),
+    prescription?: {
+      prescriptionNumber?: string;
+      doctorName?: string;
+      patientName?: string;
     };
-
-    let savedSale: any = null;
-    if (getIsDbConnected()) {
-      savedSale = new SaleModel(newSale);
-      await savedSale.save();
-    } else {
-      savedSale = { _id: this.genId(), ...newSale };
-      this.sales.unshift(savedSale);
+  }) {
+    if (!saleData.cashierId) {
+      throw new Error('Cashier identification required for sale transaction.');
     }
 
-    // Trigger alerts if any
-    for (const alert of lowStockAlertsToTrigger) {
-      await this.createAlert(alert);
-    }
+    // Acquire lock to guarantee atomic stock deduction and prevent concurrent overdraft
+    const releaseLock = await checkoutMutex.acquire();
 
-    return { sale: savedSale, alerts: lowStockAlertsToTrigger };
+    try {
+      const now = new Date();
+      const saleItems: any[] = [];
+      let subtotal = 0;
+      const lowStockAlertsToTrigger: any[] = [];
+      const settings = await this.getSettings();
+
+      // Pre-check stock across valid (non-expired) batches before modifying any inventory
+      for (const item of saleData.items) {
+        if (!item.quantity || item.quantity <= 0) {
+          throw new Error('Item quantity must be greater than zero.');
+        }
+
+        let med: any = null;
+        let validBatches: any[] = [];
+
+        if (getIsDbConnected()) {
+          med = await MedicationModel.findById(item.medicationId);
+          // FEFO rule: Only fetch non-expired batches (expiryDate > now), sorted ascending by expiryDate
+          validBatches = await InventoryBatchModel.find({
+            medicationId: item.medicationId,
+            status: 'active',
+            quantityInStock: { $gt: 0 },
+            expiryDate: { $gt: now },
+          }).sort({ expiryDate: 1 });
+        } else {
+          med = this.medications.find((m) => m._id.toString() === item.medicationId.toString());
+          validBatches = this.batches
+            .filter(
+              (b) =>
+                b.medicationId.toString() === item.medicationId.toString() &&
+                b.status === 'active' &&
+                b.quantityInStock > 0 &&
+                new Date(b.expiryDate) > now
+            )
+            .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
+        }
+
+        if (!med) {
+          throw new Error(`Medication not found: ${item.medicationId}`);
+        }
+
+        const availableUnexpiredStock = validBatches.reduce((acc, b) => acc + b.quantityInStock, 0);
+        if (availableUnexpiredStock < item.quantity) {
+          throw new Error(
+            `Insufficient valid (unexpired) stock for ${med.name}. Requested: ${item.quantity}, Available: ${availableUnexpiredStock}`
+          );
+        }
+
+        // Deduct from earliest expiring batches first
+        let needed = item.quantity;
+        for (const batch of validBatches) {
+          if (needed <= 0) break;
+          const take = Math.min(batch.quantityInStock, needed);
+          const balanceBefore = batch.quantityInStock;
+          batch.quantityInStock -= take;
+          if (batch.quantityInStock === 0) batch.status = 'depleted';
+
+          if (getIsDbConnected()) {
+            await batch.save();
+          }
+
+          const itemSubtotal = roundMoney(take * batch.sellingPrice);
+          subtotal = roundMoney(subtotal + itemSubtotal);
+
+          saleItems.push({
+            medicationId: med._id,
+            batchId: batch._id,
+            medicationName: med.name,
+            batchNo: batch.batchNo,
+            expiryDate: batch.expiryDate,
+            quantity: take,
+            unitPrice: batch.sellingPrice,
+            subtotal: itemSubtotal,
+          });
+
+          // Record stock movement
+          const movementData = {
+            medicationId: med._id,
+            batchId: batch._id,
+            movementType: 'SALE',
+            quantity: -take,
+            balanceBefore,
+            balanceAfter: batch.quantityInStock,
+            performedBy: saleData.cashierId,
+            reason: `POS sale to ${saleData.customerName || 'Walk-in Customer'}`,
+            createdAt: new Date(),
+          };
+
+          if (getIsDbConnected()) {
+            await new StockMovementModel(movementData).save();
+          } else {
+            this.stockMovements.unshift({ _id: this.genId(), ...movementData });
+          }
+
+          needed -= take;
+        }
+
+        // Check if total stock is now below reorder threshold
+        const remainingStock = availableUnexpiredStock - item.quantity;
+        const reorderLevel = med.reorderThreshold ?? settings?.defaultReorderThreshold ?? 20;
+        if (remainingStock <= reorderLevel) {
+          lowStockAlertsToTrigger.push({
+            medicationId: med._id,
+            message: `Low Stock Alert: ${med.name} has only ${remainingStock} units left (Threshold: ${reorderLevel}).`,
+            thresholdAtAlert: reorderLevel,
+            alertType: remainingStock === 0 ? 'OUT_OF_STOCK' : 'LOW_STOCK',
+          });
+        }
+      }
+
+      const discount = roundMoney(saleData.discount || 0);
+      const taxRate = settings?.taxRate ?? 5;
+      const taxableAmount = Math.max(0, roundMoney(subtotal - discount));
+      const tax = roundMoney((taxableAmount * taxRate) / 100);
+      const totalAmount = roundMoney(taxableAmount + tax);
+
+      const count = getIsDbConnected() ? (await SaleModel.countDocuments()) + 1 : this.sales.length + 1;
+      const invoicePrefix = settings?.invoicePrefix || 'INV-2026-';
+      const invoiceNo = `${invoicePrefix}${count.toString().padStart(4, '0')}`;
+
+      const newSale = {
+        invoiceNo,
+        cashierId: saleData.cashierId,
+        customerName: saleData.customerName || 'Walk-in Customer',
+        customerPhone: saleData.customerPhone || 'N/A',
+        prescription: saleData.prescription || {},
+        items: saleItems,
+        subtotal,
+        discount,
+        tax,
+        totalAmount,
+        paymentMode: saleData.paymentMode,
+        status: 'completed',
+        notes: saleData.notes,
+        createdAt: new Date(),
+      };
+
+      let savedSale: any = null;
+      if (getIsDbConnected()) {
+        savedSale = new SaleModel(newSale);
+        await savedSale.save();
+      } else {
+        savedSale = { _id: this.genId(), ...newSale };
+        this.sales.unshift(savedSale);
+      }
+
+      // Trigger low-stock alerts
+      for (const alert of lowStockAlertsToTrigger) {
+        await this.createAlert(alert);
+      }
+
+      return { sale: savedSale, alerts: lowStockAlertsToTrigger };
+    } finally {
+      releaseLock();
+    }
   }
 
-  // SALES HISTORY
+  // SALES HISTORY & RETURNS
   async getSales(filter: { search?: string; status?: string; paymentMode?: string }) {
     let list: any[] = [];
     if (getIsDbConnected()) {
@@ -568,7 +668,12 @@ class InMemoryStore {
     };
   }
 
-  async returnSale(saleId: string, reason: string, userId: string) {
+  async returnSale(
+    saleId: string,
+    reason: string,
+    userId: string,
+    returnItems?: { batchId: string; quantity: number }[]
+  ) {
     let sale: any = null;
     if (getIsDbConnected()) {
       sale = await SaleModel.findById(saleId);
@@ -576,45 +681,91 @@ class InMemoryStore {
       sale = this.sales.find((s) => s._id.toString() === saleId.toString());
     }
     if (!sale) throw new Error('Sale not found');
-    if (sale.status === 'returned') throw new Error('Sale is already marked as returned');
+    if (sale.status === 'returned') throw new Error('Sale has already been completely returned.');
 
-    sale.status = 'returned';
+    const now = new Date();
+    const itemsToReturn = returnItems && returnItems.length > 0
+      ? returnItems
+      : sale.items.map((i: any) => ({ batchId: i.batchId.toString(), quantity: i.quantity }));
 
-    // Restore stock to batches
-    for (const item of sale.items) {
+    let totalRefundAmount = 0;
+    const returnedLogItems: any[] = [];
+
+    for (const ret of itemsToReturn) {
+      const originalItem = sale.items.find((i: any) => i.batchId.toString() === ret.batchId.toString());
+      if (!originalItem) continue;
+
+      const qty = Math.min(ret.quantity, originalItem.quantity);
+      if (qty <= 0) continue;
+
+      const refundItemAmount = roundMoney(qty * originalItem.unitPrice);
+      totalRefundAmount = roundMoney(totalRefundAmount + refundItemAmount);
+
+      returnedLogItems.push({
+        medicationId: originalItem.medicationId,
+        batchId: originalItem.batchId,
+        medicationName: originalItem.medicationName,
+        batchNo: originalItem.batchNo,
+        quantity: qty,
+        unitPrice: originalItem.unitPrice,
+        refundSubtotal: refundItemAmount,
+      });
+
+      // Restore stock safely: check if the batch has expired!
       if (getIsDbConnected()) {
-        const batch = await InventoryBatchModel.findById(item.batchId);
+        const batch = await InventoryBatchModel.findById(originalItem.batchId);
         if (batch) {
-          batch.quantityInStock += item.quantity;
-          batch.status = 'active';
+          const balanceBefore = batch.quantityInStock;
+          const isExpired = new Date(batch.expiryDate) <= now;
+          if (isExpired) {
+            // Do NOT restock expired items into active inventory
+            batch.status = 'expired';
+          } else {
+            batch.quantityInStock += qty;
+            batch.status = 'active';
+          }
           await batch.save();
+
+          await new StockMovementModel({
+            medicationId: originalItem.medicationId,
+            batchId: originalItem.batchId,
+            movementType: 'SALE_RETURN',
+            quantity: isExpired ? 0 : qty,
+            balanceBefore,
+            balanceAfter: batch.quantityInStock,
+            performedBy: userId,
+            reason: `Returned invoice ${sale.invoiceNo} (${isExpired ? 'EXPIRED: NOT RESTOCKED' : 'Restocked'}): ${reason}`,
+          }).save();
         }
-        await new StockMovementModel({
-          medicationId: item.medicationId,
-          batchId: item.batchId,
-          movementType: 'SALE_RETURN',
-          quantity: item.quantity,
-          performedBy: userId,
-          reason: `Returned invoice ${sale.invoiceNo}: ${reason}`,
-        }).save();
       } else {
-        const batch = this.batches.find((b) => b._id.toString() === item.batchId.toString());
+        const batch = this.batches.find((b) => b._id.toString() === originalItem.batchId.toString());
         if (batch) {
-          batch.quantityInStock += item.quantity;
-          batch.status = 'active';
+          const balanceBefore = batch.quantityInStock;
+          const isExpired = new Date(batch.expiryDate) <= now;
+          if (isExpired) {
+            batch.status = 'expired';
+          } else {
+            batch.quantityInStock += qty;
+            batch.status = 'active';
+          }
+
+          this.stockMovements.unshift({
+            _id: this.genId(),
+            medicationId: originalItem.medicationId,
+            batchId: originalItem.batchId,
+            movementType: 'SALE_RETURN',
+            quantity: isExpired ? 0 : qty,
+            balanceBefore,
+            balanceAfter: batch.quantityInStock,
+            performedBy: userId,
+            reason: `Returned invoice ${sale.invoiceNo} (${isExpired ? 'EXPIRED: NOT RESTOCKED' : 'Restocked'}): ${reason}`,
+            createdAt: new Date(),
+          });
         }
-        this.stockMovements.unshift({
-          _id: this.genId(),
-          medicationId: item.medicationId,
-          batchId: item.batchId,
-          movementType: 'SALE_RETURN',
-          quantity: item.quantity,
-          performedBy: userId,
-          reason: `Returned invoice ${sale.invoiceNo}: ${reason}`,
-          createdAt: new Date(),
-        });
       }
     }
+
+    sale.status = 'returned';
 
     if (getIsDbConnected()) {
       await sale.save();
@@ -622,16 +773,8 @@ class InMemoryStore {
         returnNo: `RET-${Date.now().toString().slice(-4)}`,
         originalSaleId: sale._id,
         invoiceNo: sale.invoiceNo,
-        items: sale.items.map((i: any) => ({
-          medicationId: i.medicationId,
-          batchId: i.batchId,
-          medicationName: i.medicationName,
-          batchNo: i.batchNo,
-          quantity: i.quantity,
-          unitPrice: i.unitPrice,
-          refundSubtotal: i.subtotal,
-        })),
-        refundAmount: sale.totalAmount,
+        items: returnedLogItems,
+        refundAmount: totalRefundAmount || sale.totalAmount,
         reason,
         processedBy: userId,
       });
@@ -642,7 +785,7 @@ class InMemoryStore {
         returnNo: `RET-${Date.now().toString().slice(-4)}`,
         originalSaleId: sale._id,
         invoiceNo: sale.invoiceNo,
-        refundAmount: sale.totalAmount,
+        refundAmount: totalRefundAmount || sale.totalAmount,
         reason,
         processedBy: userId,
         createdAt: new Date(),
@@ -695,10 +838,24 @@ class InMemoryStore {
     return this.suppliers[index];
   }
 
+  async deleteSupplier(id: string) {
+    if (getIsDbConnected()) {
+      return await SupplierModel.findByIdAndDelete(id);
+    }
+    const index = this.suppliers.findIndex((s) => s._id.toString() === id.toString());
+    if (index === -1) return false;
+    this.suppliers.splice(index, 1);
+    return true;
+  }
+
   // PURCHASES & STOCK RECEIVING
   async getPurchases() {
     if (getIsDbConnected()) {
-      return await PurchaseModel.find().populate('supplierId').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
+      return await PurchaseModel.find()
+        .populate('supplierId')
+        .populate('createdBy', 'name email')
+        .sort({ createdAt: -1 })
+        .lean();
     }
     return this.purchases.map((p) => {
       const supplier = this.suppliers.find((s) => s._id.toString() === p.supplierId.toString());
@@ -721,7 +878,7 @@ class InMemoryStore {
       purchaseNo,
       supplierId: purchaseData.supplierId,
       items: purchaseData.items,
-      totalAmount: purchaseData.totalAmount,
+      totalAmount: roundMoney(purchaseData.totalAmount),
       status: purchaseData.status || 'Ordered',
       createdBy: userId,
       notes: purchaseData.notes,
@@ -734,6 +891,36 @@ class InMemoryStore {
     }
     const p = { _id: this.genId(), ...newPurchase };
     this.purchases.unshift(p);
+    return p;
+  }
+
+  async updatePurchase(purchaseId: string, updates: any) {
+    if (getIsDbConnected()) {
+      const p = await PurchaseModel.findById(purchaseId);
+      if (!p) throw new Error('Purchase order not found');
+      if (p.status === 'Received') throw new Error('Cannot edit an already received purchase order.');
+      Object.assign(p, updates);
+      return await p.save();
+    }
+    const index = this.purchases.findIndex((item) => item._id.toString() === purchaseId.toString());
+    if (index === -1) throw new Error('Purchase order not found');
+    if (this.purchases[index].status === 'Received') throw new Error('Cannot edit an already received purchase order.');
+    this.purchases[index] = { ...this.purchases[index], ...updates, updatedAt: new Date() };
+    return this.purchases[index];
+  }
+
+  async cancelPurchase(purchaseId: string) {
+    if (getIsDbConnected()) {
+      const p = await PurchaseModel.findById(purchaseId);
+      if (!p) throw new Error('Purchase order not found');
+      if (p.status === 'Received') throw new Error('Cannot cancel an already received purchase order.');
+      p.status = 'Cancelled';
+      return await p.save();
+    }
+    const p = this.purchases.find((item) => item._id.toString() === purchaseId.toString());
+    if (!p) throw new Error('Purchase order not found');
+    if (p.status === 'Received') throw new Error('Cannot cancel an already received purchase order.');
+    p.status = 'Cancelled';
     return p;
   }
 
@@ -772,6 +959,8 @@ class InMemoryStore {
           batchId: batch._id,
           movementType: 'PURCHASE_RECEIPT',
           quantity: item.quantity,
+          balanceBefore: 0,
+          balanceAfter: item.quantity,
           referenceId: p.purchaseNo,
           performedBy: userId,
           reason: `Stock receipt against PO ${p.purchaseNo}`,
@@ -798,6 +987,8 @@ class InMemoryStore {
           batchId: batchId,
           movementType: 'PURCHASE_RECEIPT',
           quantity: item.quantity,
+          balanceBefore: 0,
+          balanceAfter: item.quantity,
           referenceId: p.purchaseNo,
           performedBy: userId,
           reason: `Stock receipt against PO ${p.purchaseNo}`,
@@ -876,6 +1067,7 @@ class InMemoryStore {
       const batch = await InventoryBatchModel.findById(batchId);
       if (!batch) throw new Error('Batch not found');
       const qty = batch.quantityInStock;
+      const balanceBefore = qty;
       batch.quantityInStock = 0;
       batch.status = 'depleted';
       await batch.save();
@@ -885,6 +1077,8 @@ class InMemoryStore {
         batchId: batch._id,
         movementType: 'EXPIRED_REMOVAL',
         quantity: -qty,
+        balanceBefore,
+        balanceAfter: 0,
         performedBy: userId,
         reason: reason || 'Expired batch disposed',
       }).save();
@@ -893,6 +1087,7 @@ class InMemoryStore {
       const batch = this.batches.find((b) => b._id.toString() === batchId.toString());
       if (!batch) throw new Error('Batch not found');
       const qty = batch.quantityInStock;
+      const balanceBefore = qty;
       batch.quantityInStock = 0;
       batch.status = 'depleted';
 
@@ -902,6 +1097,8 @@ class InMemoryStore {
         batchId: batch._id,
         movementType: 'EXPIRED_REMOVAL',
         quantity: -qty,
+        balanceBefore,
+        balanceAfter: 0,
         performedBy: userId,
         reason: reason || 'Expired batch disposed',
         createdAt: new Date(),
@@ -994,7 +1191,7 @@ class InMemoryStore {
       weeklySalesData.push({
         day: dayName,
         date: `${d.getMonth() + 1}/${d.getDate()}`,
-        amount: Math.round(dayTotal * 100) / 100,
+        amount: roundMoney(dayTotal),
       });
     }
 
@@ -1006,7 +1203,7 @@ class InMemoryStore {
     });
     const paymentData = Object.entries(paymentMethods).map(([name, value]) => ({
       name,
-      value: Math.round(value * 100) / 100,
+      value: roundMoney(value),
     }));
 
     // Top-selling medicines
@@ -1035,7 +1232,7 @@ class InMemoryStore {
     }));
 
     return {
-      todaySales: Math.round(todaySalesAmount * 100) / 100,
+      todaySales: roundMoney(todaySalesAmount),
       totalMedicines: meds.length,
       totalStockUnits,
       lowStockCount,
@@ -1075,4 +1272,3 @@ class InMemoryStore {
 }
 
 export const dbStore = new InMemoryStore();
-

@@ -5,9 +5,16 @@ export interface ISaleItem {
   batchId: mongoose.Types.ObjectId;
   medicationName: string;
   batchNo: string;
+  expiryDate: Date;
   quantity: number;
   unitPrice: number;
   subtotal: number;
+}
+
+export interface ISalePrescription {
+  prescriptionNumber?: string;
+  doctorName?: string;
+  patientName?: string;
 }
 
 export interface ISale extends Document {
@@ -15,6 +22,7 @@ export interface ISale extends Document {
   cashierId: mongoose.Types.ObjectId;
   customerName?: string;
   customerPhone?: string;
+  prescription?: ISalePrescription;
   items: ISaleItem[];
   subtotal: number;
   discount: number;
@@ -33,9 +41,19 @@ const SaleItemSchema = new Schema<ISaleItem>(
     batchId: { type: Schema.Types.ObjectId, ref: 'InventoryBatch', required: true },
     medicationName: { type: String, required: true },
     batchNo: { type: String, required: true },
+    expiryDate: { type: Date, required: true },
     quantity: { type: Number, required: true, min: 1 },
     unitPrice: { type: Number, required: true, min: 0 },
     subtotal: { type: Number, required: true, min: 0 },
+  },
+  { _id: false }
+);
+
+const SalePrescriptionSchema = new Schema<ISalePrescription>(
+  {
+    prescriptionNumber: { type: String, trim: true },
+    doctorName: { type: String, trim: true },
+    patientName: { type: String, trim: true },
   },
   { _id: false }
 );
@@ -46,6 +64,7 @@ const SaleSchema = new Schema<ISale>(
     cashierId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     customerName: { type: String, trim: true },
     customerPhone: { type: String, trim: true },
+    prescription: { type: SalePrescriptionSchema, default: {} },
     items: [SaleItemSchema],
     subtotal: { type: Number, required: true, min: 0 },
     discount: { type: Number, default: 0, min: 0 },
@@ -59,4 +78,3 @@ const SaleSchema = new Schema<ISale>(
 );
 
 export const SaleModel = mongoose.models.Sale || mongoose.model<ISale>('Sale', SaleSchema);
-

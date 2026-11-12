@@ -11,6 +11,7 @@ export interface IStockMovement extends Document {
     | 'DAMAGE_DISPOSAL'
     | 'EXPIRED_REMOVAL';
   quantity: number;
+  balanceBefore?: number;
   balanceAfter?: number;
   referenceId?: string;
   performedBy: mongoose.Types.ObjectId;
@@ -36,6 +37,7 @@ const StockMovementSchema = new Schema<IStockMovement>(
       index: true,
     },
     quantity: { type: Number, required: true },
+    balanceBefore: { type: Number },
     balanceAfter: { type: Number },
     referenceId: { type: String, trim: true },
     performedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
@@ -46,4 +48,3 @@ const StockMovementSchema = new Schema<IStockMovement>(
 
 export const StockMovementModel =
   mongoose.models.StockMovement || mongoose.model<IStockMovement>('StockMovement', StockMovementSchema);
-
