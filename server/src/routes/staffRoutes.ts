@@ -3,6 +3,7 @@ import {
   getStaff,
   createStaff,
   updateStaff,
+  deleteStaff,
   resetStaffPassword,
 } from '../controllers/staffController.js';
 import { authenticateToken } from '../middleware/authMiddleware.js';
@@ -16,7 +17,7 @@ router.use(requireAdmin);
 router.get('/', getStaff);
 router.post('/', createStaff);
 router.put('/:id', updateStaff);
+router.delete('/:id', deleteStaff);
 router.post('/:id/reset-password', resetStaffPassword);
 
 export default router;
-

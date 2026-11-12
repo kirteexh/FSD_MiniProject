@@ -29,6 +29,19 @@ export const getMedicationById = async (req: Request, res: Response) => {
   }
 };
 
+export const getMedicationByBarcode = async (req: Request, res: Response) => {
+  try {
+    const { code } = req.params;
+    const medication = await dbStore.getMedicationByBarcode(code);
+    if (!medication) {
+      return res.status(404).json({ success: false, message: `Medication with barcode ${code} not found.` });
+    }
+    res.json({ success: true, medication });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 export const createMedication = async (req: AuthRequest, res: Response) => {
   try {
     const {
@@ -130,12 +143,16 @@ export const adjustStock = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ success: false, message: 'Batch ID, quantity change, and reason are required.' });
     }
 
+    if (!req.user?._id) {
+      return res.status(401).json({ success: false, message: 'User session required for stock adjustment.' });
+    }
+
     const batch = await dbStore.adjustStock(
       id,
       batchId,
       Number(quantityChange),
       reason,
-      req.user?._id || '66a100000000000000000001'
+      req.user._id
     );
 
     res.json({ success: true, batch });
@@ -143,4 +160,3 @@ export const adjustStock = async (req: AuthRequest, res: Response) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
-

@@ -19,8 +19,12 @@ export const authenticateToken = async (req: AuthRequest, res: Response, next: N
     return res.status(401).json({ success: false, message: 'Access denied. No token provided.' });
   }
 
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    return res.status(500).json({ success: false, message: 'Server configuration error: JWT_SECRET missing.' });
+  }
+
   try {
-    const secret = process.env.JWT_SECRET || 'pharmacare_super_secure_jwt_secret_key_2026_x!98';
     const decoded = jwt.verify(token, secret) as any;
     const user = await dbStore.findUserById(decoded.id);
 
@@ -35,8 +39,7 @@ export const authenticateToken = async (req: AuthRequest, res: Response, next: N
       role: user.role,
     };
     next();
-  } catch (error) {
-    return res.status(403).json({ success: false, message: 'Invalid or expired token.' });
+  } catch (error: any) {
+    return res.status(401).json({ success: false, message: 'Invalid or expired token.' });
   }
 };
-

@@ -1,10 +1,12 @@
 import express from 'express';
 import http from 'http';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 
-import { connectDB } from './config/db.js';
+import { connectDB, getIsDbConnected } from './config/db.js';
 import { initSocket } from './socket/socketHandler.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
@@ -23,31 +25,72 @@ import settingsRoutes from './routes/settingsRoutes.js';
 
 dotenv.config();
 
+// Strict security requirement: Reject startup if JWT_SECRET is missing in production or development
+if (!process.env.JWT_SECRET) {
+  console.error('[FATAL] JWT_SECRET environment variable is not defined! Server refuses to boot with insecure defaults.');
+  process.exit(1);
+}
+
 const app = express();
 const server = http.createServer(app);
 
-const PORT = process.env.PORT || 5000;
+// Default to port 5001 to prevent conflicts with macOS AirPlay Receiver (port 5000)
+const PORT = process.env.PORT || 5001;
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 
-// Socket.io initialization
+// Socket.io initialization with authentication
 initSocket(server, CLIENT_URL);
 
-// Middleware
+// Security Headers
+app.use(helmet());
+
+// CORS restriction
+const allowedOrigins = [
+  CLIENT_URL,
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+];
 app.use(
   cors({
-    origin: [CLIENT_URL, 'http://localhost:3000', 'http://127.0.0.1:3000'],
+    origin: (origin, callback) => {
+      // Allow requests with no origin (such as mobile apps, curl, or server-to-server)
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS blocked for origin: ${origin}`));
+      }
+    },
     credentials: true,
   })
 );
-app.use(express.json());
-app.use(morgan('dev'));
 
-// Health check
+app.use(express.json({ limit: '1mb' }));
+if (process.env.NODE_ENV !== 'test') {
+  app.use(morgan('dev'));
+}
+
+// Rate Limiter for Authentication endpoints to mitigate brute-force attempts
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 30, // Limit each IP to 30 requests per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many login attempts from this IP. Please try again after 15 minutes.',
+  },
+});
+app.use('/api/auth/login', loginLimiter);
+
+// Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     service: 'PharmaCare Backend API',
     version: '1.0.0',
+    port: PORT,
+    database: getIsDbConnected() ? 'connected (MongoDB)' : 'in-memory (fallback)',
+    uptime: Math.floor(process.uptime()),
     timestamp: new Date().toISOString(),
   });
 });
@@ -69,13 +112,16 @@ app.use('/api/settings', settingsRoutes);
 // Error handling middleware
 app.use(errorHandler);
 
-// Start server and connect DB
+// Start server and connect DB if not in test environment
 const startServer = async () => {
   await connectDB();
   server.listen(PORT, () => {
-    console.log(`[PharmaCare Server] 🚀 REST API & Socket.IO server running on http://localhost:${PORT}`);
+    console.log(`[PharmaCare Server] 🚀 REST API & Socket.IO running on http://localhost:${PORT}`);
   });
 };
 
-startServer();
+if (process.env.NODE_ENV !== 'test') {
+  startServer();
+}
 
+export { app, server };

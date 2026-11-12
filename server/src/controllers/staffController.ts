@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { dbStore } from '../services/dbStore.js';
+import { AuthRequest } from '../middleware/authMiddleware.js';
 
 export const getStaff = async (req: Request, res: Response) => {
   try {
@@ -56,6 +57,25 @@ export const updateStaff = async (req: Request, res: Response) => {
   }
 };
 
+export const deleteStaff = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    if (req.user?._id === id) {
+      return res.status(400).json({ success: false, message: 'Administrators cannot delete their own account.' });
+    }
+
+    const deleted = await dbStore.deleteUser(id);
+    if (!deleted) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+
+    res.json({ success: true, message: 'Staff account removed successfully.' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 export const resetStaffPassword = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -73,4 +93,3 @@ export const resetStaffPassword = async (req: Request, res: Response) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
-
