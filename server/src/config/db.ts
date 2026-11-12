@@ -7,7 +7,7 @@ export const connectDB = async (): Promise<boolean> => {
   try {
     mongoose.set('strictQuery', false);
     await mongoose.connect(uri, {
-      serverSelectionTimeoutMS: 2500, // Quick timeout to detect local/remote availability
+      serverSelectionTimeoutMS: 5000, // 5s timeout allowing cloud Atlas TLS handshake
     });
     isConnected = true;
     console.log(`[Database] MongoDB Connected successfully: ${mongoose.connection.host}`);
