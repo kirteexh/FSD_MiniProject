@@ -15,6 +15,18 @@ const initialState: AuthState = {
   loading: true,
 };
 
+const isTokenValid = (token: string): boolean => {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return false;
+    const payload = JSON.parse(atob(parts[1]));
+    if (!payload.exp) return true;
+    return payload.exp * 1000 > Date.now();
+  } catch {
+    return false;
+  }
+};
+
 export const authSlice = createSlice({
   name: 'auth',
   initialState,
@@ -49,7 +61,7 @@ export const authSlice = createSlice({
       if (typeof window !== 'undefined') {
         const token = localStorage.getItem('pharmacare_token');
         const userStr = localStorage.getItem('pharmacare_user');
-        if (token && userStr) {
+        if (token && userStr && isTokenValid(token)) {
           try {
             state.token = token;
             state.user = JSON.parse(userStr);
@@ -58,6 +70,10 @@ export const authSlice = createSlice({
             localStorage.removeItem('pharmacare_token');
             localStorage.removeItem('pharmacare_user');
           }
+        } else if (token) {
+          // Clean up expired token
+          localStorage.removeItem('pharmacare_token');
+          localStorage.removeItem('pharmacare_user');
         }
       }
       state.loading = false;
@@ -67,4 +83,3 @@ export const authSlice = createSlice({
 
 export const { setCredentials, logout, setLoading, restoreSession } = authSlice.actions;
 export default authSlice.reducer;
-

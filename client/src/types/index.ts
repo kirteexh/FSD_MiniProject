@@ -51,6 +51,7 @@ export interface StockMovement {
   batchId?: string;
   movementType: string;
   quantity: number;
+  balanceBefore?: number;
   balanceAfter?: number;
   referenceId?: string;
   performedBy?: any;
@@ -75,9 +76,16 @@ export interface SaleItem {
   batchId: string;
   medicationName: string;
   batchNo: string;
+  expiryDate?: string | Date;
   quantity: number;
   unitPrice: number;
   subtotal: number;
+}
+
+export interface SalePrescription {
+  prescriptionNumber?: string;
+  doctorName?: string;
+  patientName?: string;
 }
 
 export interface Sale {
@@ -91,6 +99,7 @@ export interface Sale {
   };
   customerName?: string;
   customerPhone?: string;
+  prescription?: SalePrescription;
   items: SaleItem[];
   subtotal: number;
   discount: number;
@@ -199,4 +208,3 @@ export interface Settings {
   defaultReorderThreshold: number;
   expiryAlertDays: number;
 }
-

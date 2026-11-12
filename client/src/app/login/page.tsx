@@ -32,9 +32,16 @@ export default function LoginPage() {
   const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+
+  // Password Reset state
   const [forgotModalOpen, setForgotModalOpen] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
+  const [resetToken, setResetToken] = useState('');
+  const [newResetPassword, setNewResetPassword] = useState('');
+  const [resetStep, setResetStep] = useState<'request' | 'submit'>('request');
   const [forgotLoading, setForgotLoading] = useState(false);
+
+  const isDemo = process.env.NEXT_PUBLIC_DEMO === 'true';
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -76,10 +83,38 @@ export default function LoginPage() {
     try {
       const res = await api.forgotPassword(forgotEmail);
       toast.info(res.message);
-      setForgotModalOpen(false);
-      setForgotEmail('');
+      if ((res as any).demoResetToken) {
+        setResetToken((res as any).demoResetToken);
+      }
+      setResetStep('submit');
     } catch (err: any) {
-      toast.error(err.message || 'Failed to request reset link.');
+      toast.error(err.message || 'Failed to request reset instructions.');
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const handleResetPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newResetPassword || newResetPassword.length < 6) {
+      toast.error('Password must be at least 6 characters long.');
+      return;
+    }
+    setForgotLoading(true);
+    try {
+      await api.resetPassword({
+        email: forgotEmail,
+        resetToken: resetToken || 'demo-reset-token',
+        newPassword: newResetPassword,
+      });
+      toast.success('Password reset successfully. Please log in with your new password.');
+      setForgotModalOpen(false);
+      setResetStep('request');
+      setForgotEmail('');
+      setResetToken('');
+      setNewResetPassword('');
+    } catch (err: any) {
+      toast.error(err.message || 'Password reset failed.');
     } finally {
       setForgotLoading(false);
     }
@@ -99,54 +134,57 @@ export default function LoginPage() {
             <Activity className="w-7 h-7 stroke-[2.5]" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">
-              Pharma<span className="text-sky-400">Care</span>
+            <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+              PharmaCare
+              <span className="text-[10px] font-semibold tracking-wider uppercase px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-400/30">
+                PRO
+              </span>
             </h1>
-            <p className="text-xs text-sky-200/70 uppercase tracking-widest font-semibold">
-              Clinical & Retail Pharmacy Platform
-            </p>
+            <p className="text-xs text-sky-200/70 font-medium">Enterprise Pharmacy Management</p>
           </div>
         </div>
 
-        {/* Hero Pitch */}
-        <div className="relative z-10 my-12 max-w-lg space-y-6">
+        {/* Middle Value Pitch */}
+        <div className="relative z-10 my-10 md:my-0 space-y-6">
           <motion.div
-            initial={{ opacity: 0, y: 15 }}
+            initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5 }}
+            className="space-y-3"
           >
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-500/20 text-sky-300 text-xs font-semibold mb-4 border border-sky-400/20">
-              <Sparkles className="w-3.5 h-3.5" /> Next-Gen Pharmacy Management
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-500/10 border border-sky-400/20 text-sky-300 text-xs font-medium">
+              <Sparkles className="w-3.5 h-3.5 text-sky-400" />
+              <span>Smart FEFO Dispensing & POS</span>
             </div>
-            <h2 className="text-3xl lg:text-4xl font-extrabold tracking-tight leading-tight text-white">
-              Streamline your pharmacy operations with precision.
+            <h2 className="text-3xl lg:text-4xl font-extrabold tracking-tight text-white leading-tight">
+              Clinical precision meets retail speed.
             </h2>
-            <p className="mt-4 text-sm text-slate-300 leading-relaxed">
-              Real-time inventory tracking, intelligent FEFO-based Point-of-Sale billing, automated low-stock and expiry alerts, and comprehensive financial reports — all in one modern clinical system.
+            <p className="text-slate-300 text-sm leading-relaxed max-w-md">
+              Secure batch management, automated expiry tracking, real-time inventory alerts, and rapid
+              point-of-sale billing built for Indian healthcare standards.
             </p>
           </motion.div>
 
-          {/* Feature Highlights */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-4">
-            <div className="p-3.5 rounded-xl bg-white/5 border border-white/10 backdrop-blur-sm">
-              <div className="flex items-center gap-2.5 text-sky-400 font-semibold text-xs mb-1">
-                <Zap className="w-4 h-4" /> Live WebSockets
+          {/* Key Feature Highlights */}
+          <div className="space-y-3 pt-2">
+            {[
+              'First-Expiry, First-Out (FEFO) automated batch prioritization',
+              'Proactive 7, 30 & 90-day expiry monitoring and write-offs',
+              'Real-time WebSocket alerts on critical reorder thresholds',
+              'Role-based access control protecting clinical audits',
+            ].map((feature, idx) => (
+              <div key={idx} className="flex items-center gap-2.5 text-xs text-slate-200">
+                <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{feature}</span>
               </div>
-              <p className="text-[11px] text-slate-300">Instant alerts when stock falls below reorder thresholds.</p>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-white/5 border border-white/10 backdrop-blur-sm">
-              <div className="flex items-center gap-2.5 text-emerald-400 font-semibold text-xs mb-1">
-                <CheckCircle className="w-4 h-4" /> FEFO Auto-Deduction
-              </div>
-              <p className="text-[11px] text-slate-300">First-Expiry, First-Out batch selection safeguards medicine freshness.</p>
-            </div>
+            ))}
           </div>
         </div>
 
         {/* Footer info */}
-        <div className="relative z-10 text-xs text-slate-400">
-          © 2026 PharmaCare Chemist & Druggist. Compliant with Drugs and Cosmetics Act & CDSCO Rules, India.
+        <div className="relative z-10 pt-4 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+          <span>PharmaCare Chemist & Druggist</span>
+          <span>Version 2.0 • INR (₹)</span>
         </div>
       </div>
 
@@ -158,28 +196,30 @@ export default function LoginPage() {
             <p className="text-sm text-slate-500 mt-1">Enter your pharmacist or store manager credentials.</p>
           </div>
 
-          {/* Demo Auto-fill Helper Banner */}
-          <div className="p-3.5 bg-sky-50/80 border border-sky-200 rounded-xl space-y-2">
-            <div className="text-xs font-semibold text-sky-900 flex items-center gap-1.5">
-              <ShieldCheck className="w-4 h-4 text-sky-600" /> Demo Credentials Quick-Fill:
+          {/* Demo Auto-fill Helper Banner - Gated by NEXT_PUBLIC_DEMO */}
+          {isDemo && (
+            <div className="p-3.5 bg-sky-50/80 border border-sky-200 rounded-xl space-y-2">
+              <div className="text-xs font-semibold text-sky-900 flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-sky-600" /> Demo Credentials Quick-Fill (Test Mode):
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => fillDemo('admin')}
+                  className="flex-1 text-xs py-1.5 px-2.5 bg-white hover:bg-sky-100 text-sky-800 font-medium rounded-lg border border-sky-200 transition-colors shadow-2xs"
+                >
+                  Admin (Dr. Kirteesh)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fillDemo('cashier')}
+                  className="flex-1 text-xs py-1.5 px-2.5 bg-white hover:bg-sky-100 text-sky-800 font-medium rounded-lg border border-sky-200 transition-colors shadow-2xs"
+                >
+                  Cashier (Pooja Sharma)
+                </button>
+              </div>
             </div>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => fillDemo('admin')}
-                className="flex-1 text-xs py-1.5 px-2.5 bg-white hover:bg-sky-100 text-sky-800 font-medium rounded-lg border border-sky-200 transition-colors shadow-xs"
-              >
-                Fill Admin (Dr. Kirteesh)
-              </button>
-              <button
-                type="button"
-                onClick={() => fillDemo('cashier')}
-                className="flex-1 text-xs py-1.5 px-2.5 bg-white hover:bg-sky-100 text-sky-800 font-medium rounded-lg border border-sky-200 transition-colors shadow-xs"
-              >
-                Fill Cashier (Pooja Sharma)
-              </button>
-            </div>
-          </div>
+          )}
 
           {errorMsg && (
             <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl font-medium">
@@ -201,7 +241,7 @@ export default function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="name@pharmacare.io"
-                  className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all shadow-xs"
+                  className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all shadow-2xs"
                 />
               </div>
             </div>
@@ -212,7 +252,10 @@ export default function LoginPage() {
                 <label className="text-xs font-semibold text-slate-700">Password</label>
                 <button
                   type="button"
-                  onClick={() => setForgotModalOpen(true)}
+                  onClick={() => {
+                    setResetStep('request');
+                    setForgotModalOpen(true);
+                  }}
                   className="text-xs font-medium text-sky-600 hover:text-sky-800 transition-colors"
                 >
                   Forgot password?
@@ -226,7 +269,7 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full pl-10 pr-10 py-2.5 bg-white border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all shadow-xs"
+                  className="w-full pl-10 pr-10 py-2.5 bg-white border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all shadow-2xs"
                 />
                 <button
                   type="button"
@@ -276,45 +319,91 @@ export default function LoginPage() {
         </div>
       </div>
 
-      {/* Forgot Password Modal */}
+      {/* Forgot / Reset Password Modal */}
       <Modal
         isOpen={forgotModalOpen}
         onClose={() => setForgotModalOpen(false)}
-        title="Reset Password"
-        subtitle="We'll send password recovery instructions to your email."
+        title={resetStep === 'request' ? 'Password Recovery' : 'Set New Password'}
+        subtitle={
+          resetStep === 'request'
+            ? 'Enter your registered email to request recovery instructions.'
+            : 'Enter the recovery token and your new password.'
+        }
         maxWidth="md"
       >
-        <form onSubmit={handleForgotPassword} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1.5">Registered Email</label>
-            <input
-              type="email"
-              required
-              value={forgotEmail}
-              onChange={(e) => setForgotEmail(e.target.value)}
-              placeholder="e.g. admin@pharmacare.io"
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
-            />
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={() => setForgotModalOpen(false)}
-              className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={forgotLoading}
-              className="px-4 py-2 text-xs font-semibold bg-sky-600 hover:bg-sky-700 text-white rounded-xl shadow-sm transition-colors"
-            >
-              {forgotLoading ? 'Sending...' : 'Send Reset Link'}
-            </button>
-          </div>
-        </form>
+        {resetStep === 'request' ? (
+          <form onSubmit={handleForgotPassword} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">Registered Email</label>
+              <input
+                type="email"
+                required
+                value={forgotEmail}
+                onChange={(e) => setForgotEmail(e.target.value)}
+                placeholder="e.g. admin@pharmacare.io"
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setForgotModalOpen(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={forgotLoading}
+                className="px-4 py-2 text-xs font-semibold bg-sky-600 hover:bg-sky-700 text-white rounded-xl shadow-sm transition-colors"
+              >
+                {forgotLoading ? 'Verifying...' : 'Continue'}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={handleResetPasswordSubmit} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">Reset Token</label>
+              <input
+                type="text"
+                required
+                value={resetToken}
+                onChange={(e) => setResetToken(e.target.value)}
+                placeholder="Paste token or leave default in demo"
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono text-xs focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">New Password</label>
+              <input
+                type="password"
+                required
+                value={newResetPassword}
+                onChange={(e) => setNewResetPassword(e.target.value)}
+                placeholder="Minimum 6 characters"
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setResetStep('request')}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
+              >
+                Back
+              </button>
+              <button
+                type="submit"
+                disabled={forgotLoading}
+                className="px-4 py-2 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-sm transition-colors"
+              >
+                {forgotLoading ? 'Updating...' : 'Set New Password'}
+              </button>
+            </div>
+          </form>
+        )}
       </Modal>
     </div>
   );
 }
-

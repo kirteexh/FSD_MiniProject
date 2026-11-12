@@ -1,4 +1,4 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api';
 
 const getAuthHeaders = (): HeadersInit => {
   const token = typeof window !== 'undefined' ? localStorage.getItem('pharmacare_token') : null;
@@ -9,6 +9,16 @@ const getAuthHeaders = (): HeadersInit => {
 };
 
 async function handleResponse<T>(res: Response): Promise<T> {
+  if (res.status === 401) {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('pharmacare_token');
+      localStorage.removeItem('pharmacare_user');
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login?session=expired';
+      }
+    }
+  }
+
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(data.message || `Request failed with status ${res.status}`);
@@ -37,6 +47,26 @@ export const api = {
       body: JSON.stringify({ email }),
     }).then(handleResponse<{ success: boolean; message: string }>),
 
+  resetPassword: (payload: { email: string; resetToken: string; newPassword: string }) =>
+    fetch(`${API_BASE_URL}/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(handleResponse<{ success: boolean; message: string }>),
+
+  logout: () =>
+    fetch(`${API_BASE_URL}/auth/logout`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    }).then(handleResponse<{ success: boolean; message: string }>),
+
+  changePassword: (payload: { currentPassword: string; newPassword: string }) =>
+    fetch(`${API_BASE_URL}/auth/change-password`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(payload),
+    }).then(handleResponse<{ success: boolean; message: string }>),
+
   // DASHBOARD
   getDashboardStats: () =>
     fetch(`${API_BASE_URL}/dashboard/stats`, {
@@ -56,6 +86,11 @@ export const api = {
 
   getMedicationById: (id: string) =>
     fetch(`${API_BASE_URL}/inventory/${id}`, {
+      headers: getAuthHeaders(),
+    }).then(handleResponse<{ success: boolean; medication: any }>),
+
+  getMedicationByBarcode: (code: string) =>
+    fetch(`${API_BASE_URL}/inventory/barcode/${encodeURIComponent(code)}`, {
       headers: getAuthHeaders(),
     }).then(handleResponse<{ success: boolean; medication: any }>),
 
@@ -101,6 +136,11 @@ export const api = {
     discount?: number;
     paymentMode: string;
     notes?: string;
+    prescription?: {
+      prescriptionNumber?: string;
+      doctorName?: string;
+      patientName?: string;
+    };
   }) =>
     fetch(`${API_BASE_URL}/billing/checkout`, {
       method: 'POST',
@@ -124,11 +164,11 @@ export const api = {
       headers: getAuthHeaders(),
     }).then(handleResponse<{ success: boolean; sale: any }>),
 
-  returnSale: (id: string, reason: string) =>
+  returnSale: (id: string, reason: string, items?: { batchId: string; quantity: number }[]) =>
     fetch(`${API_BASE_URL}/sales/${id}/return`, {
       method: 'POST',
       headers: getAuthHeaders(),
-      body: JSON.stringify({ reason }),
+      body: JSON.stringify({ reason, items }),
     }).then(handleResponse<{ success: boolean; message: string; sale: any }>),
 
   // SUPPLIERS
@@ -156,6 +196,12 @@ export const api = {
       body: JSON.stringify(updates),
     }).then(handleResponse<{ success: boolean; supplier: any }>),
 
+  deleteSupplier: (id: string) =>
+    fetch(`${API_BASE_URL}/suppliers/${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    }).then(handleResponse<{ success: boolean; message: string }>),
+
   // PURCHASES
   getPurchases: () =>
     fetch(`${API_BASE_URL}/purchases`, {
@@ -168,6 +214,19 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify(data),
     }).then(handleResponse<{ success: boolean; purchase: any }>),
+
+  updatePurchase: (id: string, data: any) =>
+    fetch(`${API_BASE_URL}/purchases/${id}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    }).then(handleResponse<{ success: boolean; purchase: any }>),
+
+  cancelPurchase: (id: string) =>
+    fetch(`${API_BASE_URL}/purchases/${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    }).then(handleResponse<{ success: boolean; message: string }>),
 
   receiveStock: (purchaseId: string) =>
     fetch(`${API_BASE_URL}/purchases/${purchaseId}/receive`, {
@@ -229,6 +288,12 @@ export const api = {
       body: JSON.stringify(updates),
     }).then(handleResponse<{ success: boolean; user: any }>),
 
+  deleteStaff: (id: string) =>
+    fetch(`${API_BASE_URL}/staff/${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    }).then(handleResponse<{ success: boolean; message: string }>),
+
   resetStaffPassword: (id: string, newPassword: string) =>
     fetch(`${API_BASE_URL}/staff/${id}/reset-password`, {
       method: 'POST',
@@ -258,4 +323,3 @@ export const api = {
       body: JSON.stringify(updates),
     }).then(handleResponse<{ success: boolean; settings: any; message: string }>),
 };
-
