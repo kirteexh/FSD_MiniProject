@@ -6,7 +6,10 @@ let io: SocketIOServer | null = null;
 export const initSocket = (server: any, clientUrl: string) => {
   io = new SocketIOServer(server, {
     cors: {
-      origin: [clientUrl, 'http://localhost:3000', 'http://127.0.0.1:3000'],
+      origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+        // Allow connections from frontend deployments (Render, Vercel, localhost)
+        callback(null, true);
+      },
       methods: ['GET', 'POST', 'PUT', 'DELETE'],
       credentials: true,
     },

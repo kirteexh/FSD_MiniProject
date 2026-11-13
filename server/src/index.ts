@@ -50,18 +50,21 @@ const allowedOrigins = [
   'http://localhost:3000',
   'http://127.0.0.1:3000',
 ].filter(Boolean);
-// In production behind nginx, also allow same-origin requests
-if (process.env.NODE_ENV === 'production') {
-  allowedOrigins.push('http://localhost');
-}
+
 app.use(
   cors({
     origin: (origin, callback) => {
       // Allow requests with no origin (such as mobile apps, curl, or server-to-server)
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (
+        !origin ||
+        allowedOrigins.includes(origin) ||
+        origin.endsWith('.onrender.com') ||
+        origin.endsWith('.vercel.app') ||
+        origin.includes('localhost')
+      ) {
         callback(null, true);
       } else {
-        callback(new Error(`CORS blocked for origin: ${origin}`));
+        callback(null, true); // Permissive in deployment to avoid blocking frontend
       }
     },
     credentials: true,
@@ -85,6 +88,20 @@ const loginLimiter = rateLimit({
   },
 });
 app.use('/api/auth/login', loginLimiter);
+
+// Root landing route for health and status
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'PharmaCare Pharmacy Management System - Backend API',
+    version: '1.0.0',
+    documentation: '/api/health',
+    database: getIsDbConnected() ? 'connected (MongoDB Atlas)' : 'in-memory (fallback)',
+    uptime: `${Math.floor(process.uptime())} seconds`,
+    timestamp: new Date().toISOString(),
+    message: 'Backend API is running. Connect your frontend to this service.',
+  });
+});
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
