@@ -49,7 +49,11 @@ const allowedOrigins = [
   CLIENT_URL,
   'http://localhost:3000',
   'http://127.0.0.1:3000',
-];
+].filter(Boolean);
+// In production behind nginx, also allow same-origin requests
+if (process.env.NODE_ENV === 'production') {
+  allowedOrigins.push('http://localhost');
+}
 app.use(
   cors({
     origin: (origin, callback) => {

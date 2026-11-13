@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  # ───── Backend API & Socket.IO ─────
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: pharmacare-server
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    env_file:
+      - ./server/.env
+    environment:
+      - NODE_ENV=production
+      - PORT=5001
+      - CLIENT_URL=http://localhost:3000
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ───── Frontend (Next.js) ─────
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:5001/api
+        NEXT_PUBLIC_SOCKET_URL: http://localhost:5001
+        NEXT_PUBLIC_DEMO: "true"
+    container_name: pharmacare-client
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      server:
+        condition: service_healthy

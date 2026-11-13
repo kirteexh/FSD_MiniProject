@@ -36,3 +36,6 @@ yarn-error.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Docker (do not commit override files)
+docker-compose.override.yml
