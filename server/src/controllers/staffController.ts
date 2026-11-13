@@ -33,7 +33,8 @@ export const createStaff = async (req: Request, res: Response) => {
       role: role || 'cashier',
     });
 
-    const { passwordHash: _, ...safeUser } = user;
+    const userObj = user && typeof (user as any).toObject === 'function' ? (user as any).toObject() : user;
+    const { passwordHash: _, ...safeUser } = userObj;
     res.status(201).json({ success: true, user: safeUser });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
@@ -50,7 +51,8 @@ export const updateStaff = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: 'User not found.' });
     }
 
-    const { passwordHash: _, ...safeUser } = updated;
+    const updatedObj = updated && typeof (updated as any).toObject === 'function' ? (updated as any).toObject() : updated;
+    const { passwordHash: _, ...safeUser } = updatedObj;
     res.json({ success: true, user: safeUser });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
