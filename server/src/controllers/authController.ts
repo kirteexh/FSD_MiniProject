@@ -55,6 +55,60 @@ export const login = async (req: Request, res: Response) => {
   }
 };
 
+export const googleLogin = async (req: Request, res: Response) => {
+  try {
+    const { email, name, googleId } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Google account email is required.' });
+    }
+
+    let user = await dbStore.findUserByEmail(email);
+
+    if (!user) {
+      // Auto-provision user account
+      const isAdminEmail = email.toLowerCase().includes('admin') || email.toLowerCase().includes('kirteesh');
+      user = await dbStore.createUser({
+        name: name || email.split('@')[0],
+        email: email.toLowerCase(),
+        passwordHash: await bcrypt.hash(`Google_${Date.now()}_OAuth`, 10),
+        role: isAdminEmail ? 'admin' : 'cashier',
+        isActive: true,
+      });
+    }
+
+    if (!user.isActive) {
+      return res.status(403).json({ success: false, message: 'Account is deactivated. Contact pharmacy administrator.' });
+    }
+
+    await dbStore.updateUser(user._id.toString(), { lastLogin: new Date() });
+
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+      return res.status(500).json({ success: false, message: 'Server configuration error: JWT_SECRET missing.' });
+    }
+
+    const token = jwt.sign(
+      { id: user._id.toString(), email: user.email, role: user.role, name: user.name },
+      secret,
+      { expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as any }
+    );
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user._id.toString(),
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 export const getMe = async (req: AuthRequest, res: Response) => {
   try {
     if (!req.user) {

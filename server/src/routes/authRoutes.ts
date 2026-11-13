@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import {
   login,
+  googleLogin,
   getMe,
   forgotPassword,
   resetPassword,
@@ -12,6 +13,7 @@ import { authenticateToken } from '../middleware/authMiddleware.js';
 const router = Router();
 
 router.post('/login', login);
+router.post('/google', googleLogin);
 router.get('/me', authenticateToken, getMe);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password', resetPassword);

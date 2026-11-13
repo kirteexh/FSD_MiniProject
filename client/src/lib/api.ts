@@ -1,4 +1,18 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api';
+const getApiBaseUrl = (): string => {
+  if (typeof window !== 'undefined') {
+    // If running in browser and NOT localhost, always route to Render live backend
+    if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      return (
+        process.env.NEXT_PUBLIC_API_URL && !process.env.NEXT_PUBLIC_API_URL.includes('localhost')
+          ? process.env.NEXT_PUBLIC_API_URL
+          : 'https://fsd-miniproject-skab.onrender.com/api'
+      );
+    }
+  }
+  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api';
+};
+
+const API_BASE_URL = getApiBaseUrl();
 
 const getAuthHeaders = (): HeadersInit => {
   const token = typeof window !== 'undefined' ? localStorage.getItem('pharmacare_token') : null;
@@ -29,10 +43,17 @@ async function handleResponse<T>(res: Response): Promise<T> {
 export const api = {
   // AUTH
   login: (credentials: { email: string; password: string }) =>
-    fetch(`${API_BASE_URL}/auth/login`, {
+    fetch(`${getApiBaseUrl()}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(credentials),
+    }).then(handleResponse<{ success: boolean; token: string; user: any }>),
+
+  googleLogin: (payload: { email: string; name?: string; googleId?: string }) =>
+    fetch(`${getApiBaseUrl()}/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     }).then(handleResponse<{ success: boolean; token: string; user: any }>),
 
   getMe: () =>
