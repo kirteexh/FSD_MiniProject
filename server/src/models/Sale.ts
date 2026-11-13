@@ -41,7 +41,7 @@ const SaleItemSchema = new Schema<ISaleItem>(
     batchId: { type: Schema.Types.ObjectId, ref: 'InventoryBatch', required: true },
     medicationName: { type: String, required: true },
     batchNo: { type: String, required: true },
-    expiryDate: { type: Date, required: true },
+    expiryDate: { type: Date, required: true, default: () => new Date(Date.now() + 180 * 24 * 60 * 60 * 1000) },
     quantity: { type: Number, required: true, min: 1 },
     unitPrice: { type: Number, required: true, min: 0 },
     subtotal: { type: Number, required: true, min: 0 },

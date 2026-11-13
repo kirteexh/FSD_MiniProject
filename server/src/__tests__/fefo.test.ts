@@ -134,3 +134,4 @@ describe('FEFO (First-Expired, First-Out) Inventory Algorithm', () => {
     expect(batch?.quantityInStock).toBe(10);
   });
 });
+
