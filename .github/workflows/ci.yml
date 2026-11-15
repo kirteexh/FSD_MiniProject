@@ -29,6 +29,10 @@ jobs:
 
       - name: Run Backend Tests (FEFO & Auth RBAC)
         run: cd server && npm test -- --runInBand
+        env:
+          NODE_ENV: test
+          JWT_SECRET: ci_pharmacare_secure_test_secret_key_2026
+          PORT: 5001
 
       - name: Build Server TypeScript
         run: cd server && npm run build
